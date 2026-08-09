@@ -84,12 +84,41 @@ per-fit time as defense-in-depth, same discipline as the rest of the suite.
 
 ## Why windows are shorter here than other engines
 
-`WINDOWS = [63, 126, 252, 504, 1008]` — capped at ~4 years, versus up to
+`WINDOWS = [21, 63, 126, 252, 504, 1008]` — capped at ~4 years, versus up to
 4536 days (~18 years) elsewhere in this suite. This is a deliberate,
 principled choice, not just a compute optimization: every method here
 assumes a roughly stationary data-generating process within the window.
 Multi-year windows spanning several macro regimes badly violate that
 assumption on top of being more expensive to fit.
+
+The 21d window is intentionally the shortest available (~1 trading month).
+Its OOS test set shrinks to only ~6-8 days, which is genuinely too small to
+trust on its own — see "Low-sample warning" below.
+
+## Ridge regularization — a real bug found and fixed during validation
+
+An initial version of this engine, run against real data, produced TiMINo
+out-of-sample R² as extreme as **-106** on the 63d window with the
+30-variable COMBINED universe. That's not real anti-skill — it's overfitting:
+with more candidate regressors than usable training rows, plain OLS produces
+a near-singular fit whose coefficients blow up out-of-sample. `causal_scm.py`
+now uses a shared ridge-regularized solver (`_ridge_lstsq`, `RIDGE_ALPHA` in
+`config.py`) everywhere an OLS step is hand-rolled — both TiMINo's internal
+ordering search and the shared PCMCI/TiMINo forecasting regression. Verified
+directly: the same 30-variable/63-day/TiMINo combination that produced -106
+before now stays bounded (worst case ~-0.3) after the fix, while true
+causal signal recovery on synthetic ground-truth data is still intact.
+
+## Low-sample warning — flagged, never hidden
+
+Any (ticker, window, method) result built from fewer than
+`RELIABLE_TRAIN_SAMPLES` (40) training rows or `RELIABLE_TEST_SAMPLES` (15)
+test rows still runs and still shows up — it is never silently dropped —
+but is marked `"low_sample": true` in every JSON output and surfaced with a
+⚠️ badge on every dashboard tab. An OOS R²/hit-rate computed from a handful
+of days is not statistically trustworthy on its own, however good it looks;
+this flag exists so that fact travels with the number instead of getting
+lost.
 
 ## Data source (same as the rest of the suite)
 
