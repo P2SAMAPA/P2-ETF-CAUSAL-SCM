@@ -56,7 +56,12 @@ METHOD_LABELS = {
 # stationary data-generating process within the window; multi-year windows
 # spanning several macro regimes badly violate that assumption on top of being
 # far more expensive to fit. See README for the full reasoning.
-WINDOWS = [63, 126, 252, 504, 1008]
+#
+# 21d is intentionally the shortest window here (~1 trading month). Its train
+# set (~13 obs) and test set (~6 obs) are genuinely too small for the OOS
+# metrics to be statistically reliable on their own — see LOW_SAMPLE_* below,
+# which flags (never hides) results from windows this thin.
+WINDOWS = [21, 63, 126, 252, 504, 1008]
 
 # ── Lag structure ───────────────────────────────────────────────────────────────
 # Kept small deliberately: daily-frequency ETF/macro causal relationships
@@ -64,15 +69,36 @@ WINDOWS = [63, 126, 252, 504, 1008]
 # (conditional-independence testing and ICA both scale badly with more lags).
 MAX_LAG = 2
 
+# ── Ridge regularization for the hand-rolled OLS steps (PCMCI's and TiMINo's
+# forecasting regressions, plus TiMINo's internal ordering search) ────────────
+# Plain OLS blows up when candidate-regressor count approaches or exceeds the
+# usable training-row count — exactly what happens on short windows with large
+# universes (observed directly: TiMINo produced OOS R² as extreme as -106 on
+# the 63d window with the 30-variable COMBINED universe before this was
+# added). Ridge bounds coefficients and keeps forecasts finite even when the
+# design matrix is rank-deficient. Intercept is never penalized.
+RIDGE_ALPHA = 1.0
+
 # ── Train/test split for the OOS "which method actually works" validation ──────
 # Chronological split within each window — same discipline as the sentiment
 # engine's out-of-sample ablation: fit on TRAIN, forecast forward through
-# TEST using the frozen fitted structure (no re-fitting on test data), then
-# measure genuine forecast skill. The winning method per ticker/window is
-# picked by this, never by in-sample graph-fit statistics alone.
+# TEST using the frozen fitted structure (no re-fitting), then measure
+# genuine forecast skill. The winning method per ticker/window is picked by
+# this, never by in-sample graph-fit statistics alone.
 TRAIN_FRAC = 0.70
-MIN_TRAIN_SAMPLES = 40
-MIN_TEST_SAMPLES  = 10
+
+# Hard floor: below this, fit_and_backtest refuses to run at all (not enough
+# data for ridge to save it from being meaningless).
+MIN_TRAIN_SAMPLES = 10
+MIN_TEST_SAMPLES = 4
+
+# Reliability bar: results below this (but above the hard floor) still run
+# and are still shown — never silently hidden — but get a `low_sample`
+# warning flag surfaced in the JSON output and the dashboard, since an OOS
+# R²/hit-rate computed from a handful of days is not statistically
+# trustworthy on its own, however good it looks.
+RELIABLE_TRAIN_SAMPLES = 40
+RELIABLE_TEST_SAMPLES = 15
 
 # ── Regime-change detection (for the "temporally adaptive" re-estimation) ──────
 # Deliberately simple: causal graphs are already re-fit fresh per window (which
@@ -91,4 +117,10 @@ MAX_SECONDS_PER_FIT = 120
 
 # ── Output ─────────────────────────────────────────────────────────────────────
 TOP_N = 3
-MIN_SAMPLES = 40  # minimum non-NaN samples required for any method to attempt a fit
+# Minimum stationarised (log-return) samples required for ANY method to even
+# attempt a fit, checked in trainer.py before fit_and_backtest runs. Lowered
+# to accommodate the 21d window (which nets ~26 rows after trimming for
+# log-return/pct-change and MAX_LAG) — fit_and_backtest's own
+# MIN_TRAIN_SAMPLES/MIN_TEST_SAMPLES gates (and the low_sample warning flag)
+# are what actually govern reliability from here.
+MIN_SAMPLES = 15
