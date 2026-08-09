@@ -307,7 +307,14 @@ assumption on top of being far more expensive to fit.
         with st.expander(f"📋 Full ranking — {label} @ {selected_win}d"):
             rows = win_data.get("full_ranking", [])
             if rows:
-                df = pd.DataFrame(rows, columns=["ETF", "Causal Score", "Method", "Low Sample"])
+                # Defensive against schema drift: older result JSON (from
+                # before the low_sample flag existed) has 3-element rows
+                # [ticker, score, method]; current trainer.py writes 4
+                # [ticker, score, method, low_sample]. Pad rather than crash
+                # if a stale JSON file is ever loaded against this dashboard
+                # version.
+                normalized = [r + [False] if len(r) == 3 else r for r in rows]
+                df = pd.DataFrame(normalized, columns=["ETF", "Causal Score", "Method", "Low Sample"])
                 df["Method"] = df["Method"].map(lambda m: config.METHOD_LABELS.get(m, m))
                 df["Low Sample"] = df["Low Sample"].map(lambda b: "⚠️ yes" if b else "")
                 df.insert(0, "Rank", range(1, len(df) + 1))
