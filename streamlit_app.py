@@ -200,12 +200,17 @@ shifted mid-window.
         cols = st.columns(3)
         for idx, etf in enumerate(top_etfs):
             with cols[idx]:
+                warn_html = (
+                    '<div class="score" style="color:#ffb703">⚠️ low sample — treat with caution</div>'
+                    if etf.get("low_sample") else ""
+                )
                 st.markdown(f"""
                 <div class="hero-card">
                     <div class="ticker">{etf['ticker']}</div>
                     <div class="score">causal score = {etf['causal_score']:+.4f}</div>
                     <div class="score">{method_badge(etf['best_method'])}</div>
                     <div class="score">OOS R\u00b2 = {etf['oos_r2']:.3f} \u00b7 window = {etf['best_window']}d</div>
+                    {warn_html}
                     <div class="next-day">\U0001F4C5 {ntd}</div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -221,6 +226,7 @@ shifted mid-window.
                     "OOS R²": info["oos_r2"],
                     "OOS Correlation": info["oos_correlation"],
                     "OOS Hit Rate": info["oos_hit_rate"],
+                    "⚠️ Low Sample": "yes" if info.get("low_sample") else "",
                 } for t, info in full.items()]
                 df = pd.DataFrame(rows).sort_values("Causal Score", ascending=False)
                 st.dataframe(df, use_container_width=True, hide_index=True)
@@ -284,20 +290,26 @@ assumption on top of being far more expensive to fit.
         cols = st.columns(3)
         for idx, etf in enumerate(win_data.get("top_etfs", [])):
             with cols[idx]:
+                warn_html = (
+                    '<div class="score" style="color:#ffb703">⚠️ low sample</div>'
+                    if etf.get("low_sample") else ""
+                )
                 st.markdown(f"""
                 <div class="win-card">
                     <div class="ticker">{etf['ticker']}</div>
                     <div class="score">causal score = {etf['causal_score']:+.4f}</div>
                     <div class="score">{method_badge(etf['method'])}</div>
                     <div class="score">OOS R\u00b2 = {etf['oos_r2']:.3f}</div>
+                    {warn_html}
                 </div>
                 """, unsafe_allow_html=True)
 
         with st.expander(f"📋 Full ranking — {label} @ {selected_win}d"):
             rows = win_data.get("full_ranking", [])
             if rows:
-                df = pd.DataFrame(rows, columns=["ETF", "Causal Score", "Method"])
+                df = pd.DataFrame(rows, columns=["ETF", "Causal Score", "Method", "Low Sample"])
                 df["Method"] = df["Method"].map(lambda m: config.METHOD_LABELS.get(m, m))
+                df["Low Sample"] = df["Low Sample"].map(lambda b: "⚠️ yes" if b else "")
                 df.insert(0, "Rank", range(1, len(df) + 1))
                 st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -362,6 +374,7 @@ catch.
                         "OOS Hit Rate": d["oos_hit_rate"],
                         "N Train": d["n_train"],
                         "N Test": d["n_test"],
+                        "⚠️ Low Sample": "yes" if d.get("low_sample") else "",
                     })
 
             if rows:
