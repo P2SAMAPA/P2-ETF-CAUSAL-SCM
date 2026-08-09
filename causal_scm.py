@@ -79,6 +79,34 @@ def _check_deadline(t0: float, budget: float, where: str):
         raise FitTimeout(f"{where} exceeded {budget}s budget")
 
 
+def _ridge_lstsq(Xd: np.ndarray, yd: np.ndarray, alpha: float = None):
+    """
+    L2-regularized least squares: beta = (XtX + alpha*I)^-1 Xty.
+
+    Plain np.linalg.lstsq is fine when there are comfortably more rows than
+    columns, but both PCMCI's and TiMINo's OLS steps can end up with more
+    candidate regressors than usable training rows on short windows with
+    large universes (e.g. 63d window x 30-variable COMBINED universe) — that
+    produces a near-singular design matrix and coefficients that blow up
+    out-of-sample (observed directly: TiMINo produced OOS R² as extreme as
+    -106 on exactly this combination before this fix). Ridge regularization
+    bounds the coefficients and keeps forecasts finite even when the design
+    matrix is rank-deficient. The intercept column (assumed to be Xd[:,0])
+    is never penalized.
+    """
+    alpha = alpha if alpha is not None else config.RIDGE_ALPHA
+    n, p = Xd.shape
+    penalty = np.eye(p) * alpha
+    penalty[0, 0] = 0.0  # never penalize the intercept
+    XtX = Xd.T @ Xd + penalty
+    Xty = Xd.T @ yd
+    try:
+        beta = np.linalg.solve(XtX, Xty)
+    except np.linalg.LinAlgError:
+        beta, *_ = np.linalg.lstsq(Xd, yd, rcond=None)
+    return beta
+
+
 # ── Data prep ────────────────────────────────────────────────────────────────
 
 def build_stationary_matrix(prices: pd.DataFrame, macro: pd.DataFrame,
@@ -165,7 +193,7 @@ def _fit_ols_forecast(X: np.ndarray, parents: dict, max_lag: int):
         Xd = np.column_stack([np.ones(len(rows)), np.array(rows)])
         yd = np.array(targets)
         try:
-            beta, *_ = np.linalg.lstsq(Xd, yd, rcond=None)
+            beta = _ridge_lstsq(Xd, yd)
         except Exception:
             coefs[j] = (float(fallback_mean[j]), [])
             continue
@@ -286,7 +314,7 @@ def fit_timino(X: np.ndarray, var_names: list, max_lag: int,
         Xd = np.column_stack([np.ones(len(rows)), np.array(rows)])
         yd = np.array(targets)
         try:
-            beta, *_ = np.linalg.lstsq(Xd, yd, rcond=None)
+            beta = _ridge_lstsq(Xd, yd)
             resid = yd - Xd @ beta
         except Exception:
             resid = yd - yd.mean()
@@ -354,7 +382,7 @@ def fit_timino(X: np.ndarray, var_names: list, max_lag: int,
         Xd = np.column_stack([np.ones(len(rows)), np.array(rows)])
         yd = np.array(targets)
         try:
-            beta, res, rank, sv = np.linalg.lstsq(Xd, yd, rcond=None)
+            beta = _ridge_lstsq(Xd, yd)
             n, p = Xd.shape
             resid = yd - Xd @ beta
             dof = max(n - p, 1)
@@ -462,6 +490,10 @@ def fit_and_backtest(X: np.ndarray, var_names: list, method: str,
         "per_var": per_var,
         "n_train": split - max_lag,
         "n_test": int(valid_rows.sum()),
+        "low_sample": bool(
+            (split - max_lag) < config.RELIABLE_TRAIN_SAMPLES
+            or int(valid_rows.sum()) < config.RELIABLE_TEST_SAMPLES
+        ),
     }
 
 
