@@ -74,10 +74,26 @@ MAX_LAG = 2
 # Plain OLS blows up when candidate-regressor count approaches or exceeds the
 # usable training-row count — exactly what happens on short windows with large
 # universes (observed directly: TiMINo produced OOS R² as extreme as -106 on
-# the 63d window with the 30-variable COMBINED universe before this was
+# the 63d window with the 30-variable COMBINED universe before ridge was
 # added). Ridge bounds coefficients and keeps forecasts finite even when the
 # design matrix is rank-deficient. Intercept is never penalized.
-RIDGE_ALPHA = 1.0
+#
+# **This value was tuned, not guessed.** An initial default of 1.0 was found
+# (via real-data results, then confirmed by a synthetic sweep) to be ~100x
+# stronger than needed: it destroyed real signal (a known-good synthetic
+# causal-chain test dropped from R²=0.19 to R²=0.01) while providing ZERO
+# additional blowup protection over much smaller values — ETF/macro daily
+# returns are tiny-scale (~0.5-2% std), so a fixed alpha=1.0 completely
+# dominates the natural scale of X'X regardless of how large it gets past
+# that point. A sweep across alpha in [1e-8 .. 1.0] on both a blowup-risk
+# scenario (30 vars, 63d, pure noise) and a signal-preservation scenario
+# (known synthetic causal chain, returns-scale) found full blowup protection
+# kicks in at alpha≈0.003 and stays flat through at least alpha=0.05, while
+# signal preservation peaks around alpha=0.008-0.01. Re-validate against real
+# data with ridge_alpha_sweep.py before trusting this further — synthetic
+# tests validate the general principle, not what's truly optimal for this
+# specific data-generating process.
+RIDGE_ALPHA = 0.01
 
 # ── Train/test split for the OOS "which method actually works" validation ──────
 # Chronological split within each window — same discipline as the sentiment
