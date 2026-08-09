@@ -149,6 +149,7 @@ def process_universe_window(prices: pd.DataFrame, macro: pd.DataFrame,
                 "oos_hit_rate": _safe_float(oos["oos_hit_rate"]),
                 "n_train": res["backtest"]["n_train"],
                 "n_test": res["backtest"]["n_test"],
+                "low_sample": res["backtest"]["low_sample"],
                 "live_forecast": live_val,
             }
     return out
@@ -220,22 +221,26 @@ def main():
                 m: _zscore_method_forecasts(win_result, m) for m in config.CAUSAL_METHODS
             }
 
-            window_scores = {}  # ticker -> (score, method, oos_r2, oos_corr, oos_hit)
+            window_scores = {}  # ticker -> (score, method, oos_r2, oos_corr, oos_hit, low_sample)
             for ticker, r in win_result.items():
                 candidates = []
                 for m in config.CAUSAL_METHODS:
                     if m not in r or r[m]["live_forecast"] is None:
                         continue
                     z = zscores_by_method[m].get(ticker, 0.0)
-                    candidates.append((r[m]["oos_r2"], m, z, r[m]["oos_correlation"], r[m]["oos_hit_rate"]))
+                    candidates.append((r[m]["oos_r2"], m, z, r[m]["oos_correlation"],
+                                        r[m]["oos_hit_rate"], r[m]["low_sample"]))
                 if not candidates:
                     continue
                 # winning method for THIS ticker at THIS window = best OOS R²
+                # (low_sample is surfaced, never used to silently reorder this —
+                # see README for why: transparency over a heuristic tie-break)
                 candidates.sort(key=lambda c: c[0], reverse=True)
-                oos_r2, method, z, oos_corr, oos_hit = candidates[0]
+                oos_r2, method, z, oos_corr, oos_hit, low_sample = candidates[0]
                 window_scores[ticker] = {
                     "score": z, "method": method, "oos_r2": oos_r2,
                     "oos_correlation": oos_corr, "oos_hit_rate": oos_hit,
+                    "low_sample": low_sample,
                 }
 
                 # track global best window for this ticker
@@ -244,16 +249,18 @@ def main():
                     best[ticker] = {
                         "window": window, "method": method, "score": z,
                         "oos_r2": oos_r2, "oos_correlation": oos_corr,
-                        "oos_hit_rate": oos_hit,
+                        "oos_hit_rate": oos_hit, "low_sample": low_sample,
                     }
 
             ranked = sorted(window_scores.items(), key=lambda kv: kv[1]["score"], reverse=True)
             top_etfs = [
                 {"ticker": t, "causal_score": _safe_float(v["score"]),
-                 "method": v["method"], "oos_r2": _safe_float(v["oos_r2"])}
+                 "method": v["method"], "oos_r2": _safe_float(v["oos_r2"]),
+                 "low_sample": v["low_sample"]}
                 for t, v in ranked[:config.TOP_N]
             ]
-            full_ranking = [[t, _safe_float(v["score"]), v["method"]] for t, v in ranked]
+            full_ranking = [[t, _safe_float(v["score"]), v["method"], v["low_sample"]]
+                             for t, v in ranked]
             windows_out[str(window)] = {"top_etfs": top_etfs, "full_ranking": full_ranking}
 
         tab2_universes[universe_name] = {"windows": windows_out}
@@ -271,6 +278,7 @@ def main():
                 "oos_r2": _safe_float(v["oos_r2"]),
                 "oos_correlation": _safe_float(v["oos_correlation"]),
                 "oos_hit_rate": _safe_float(v["oos_hit_rate"]),
+                "low_sample": v["low_sample"],
             }
             for t, v in ranked_best[:config.TOP_N]
         ]
@@ -281,6 +289,7 @@ def main():
                 "oos_r2": _safe_float(v["oos_r2"]),
                 "oos_correlation": _safe_float(v["oos_correlation"]),
                 "oos_hit_rate": _safe_float(v["oos_hit_rate"]),
+                "low_sample": v["low_sample"],
             }
             for t, v in ranked_best
         }
