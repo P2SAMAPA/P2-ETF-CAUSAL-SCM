@@ -200,20 +200,20 @@ shifted mid-window.
         cols = st.columns(3)
         for idx, etf in enumerate(top_etfs):
             with cols[idx]:
-                warn_html = (
-                    '<div class="score" style="color:#ffb703">⚠️ low sample — treat with caution</div>'
-                    if etf.get("low_sample") else ""
-                )
-                st.markdown(f"""
-                <div class="hero-card">
-                    <div class="ticker">{etf['ticker']}</div>
-                    <div class="score">causal score = {etf['causal_score']:+.4f}</div>
-                    <div class="score">{method_badge(etf['best_method'])}</div>
-                    <div class="score">OOS R\u00b2 = {etf['oos_r2']:.3f} \u00b7 window = {etf['best_window']}d</div>
-                    {warn_html}
-                    <div class="next-day">\U0001F4C5 {ntd}</div>
-                </div>
-                """, unsafe_allow_html=True)
+                divs = [
+                    f'<div class="ticker">{etf["ticker"]}</div>',
+                    f'<div class="score">causal score = {etf["causal_score"]:+.4f}</div>',
+                    f'<div class="score">{method_badge(etf["best_method"])}</div>',
+                    f'<div class="score">OOS R\u00b2 = {etf["oos_r2"]:.3f} \u00b7 window = {etf["best_window"]}d</div>',
+                ]
+                if etf.get("low_sample"):
+                    divs.append(
+                        '<div class="score" style="color:#ffb703">'
+                        '⚠️ low sample — treat with caution</div>'
+                    )
+                divs.append(f'<div class="next-day">\U0001F4C5 {ntd}</div>')
+                card_html = '<div class="hero-card">' + "".join(divs) + "</div>"
+                st.markdown(card_html, unsafe_allow_html=True)
 
         with st.expander(f"📋 Full ranking — {label}"):
             full = uni_data.get("full_scores", {})
@@ -290,19 +290,16 @@ assumption on top of being far more expensive to fit.
         cols = st.columns(3)
         for idx, etf in enumerate(win_data.get("top_etfs", [])):
             with cols[idx]:
-                warn_html = (
-                    '<div class="score" style="color:#ffb703">⚠️ low sample</div>'
-                    if etf.get("low_sample") else ""
-                )
-                st.markdown(f"""
-                <div class="win-card">
-                    <div class="ticker">{etf['ticker']}</div>
-                    <div class="score">causal score = {etf['causal_score']:+.4f}</div>
-                    <div class="score">{method_badge(etf['method'])}</div>
-                    <div class="score">OOS R\u00b2 = {etf['oos_r2']:.3f}</div>
-                    {warn_html}
-                </div>
-                """, unsafe_allow_html=True)
+                divs = [
+                    f'<div class="ticker">{etf["ticker"]}</div>',
+                    f'<div class="score">causal score = {etf["causal_score"]:+.4f}</div>',
+                    f'<div class="score">{method_badge(etf["method"])}</div>',
+                    f'<div class="score">OOS R\u00b2 = {etf["oos_r2"]:.3f}</div>',
+                ]
+                if etf.get("low_sample"):
+                    divs.append('<div class="score" style="color:#ffb703">⚠️ low sample</div>')
+                card_html = '<div class="win-card">' + "".join(divs) + "</div>"
+                st.markdown(card_html, unsafe_allow_html=True)
 
         with st.expander(f"📋 Full ranking — {label} @ {selected_win}d"):
             rows = win_data.get("full_ranking", [])
