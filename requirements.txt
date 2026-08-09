@@ -1,0 +1,9 @@
+numpy
+pandas
+scipy
+scikit-learn
+lingam
+tigramite
+huggingface_hub
+streamlit
+pyarrow
