@@ -1,0 +1,30 @@
+name: Causal SCM Daily Run
+
+on:
+  schedule:
+    - cron: "10 00 * * 1-6"   # 01:00 UTC Mon–Fri
+  workflow_dispatch: {}
+
+jobs:
+  run_trainer:
+    name: Run causal discovery + push results
+    runs-on: ubuntu-latest
+    # Benchmarked at ~2-3 min for the full 3-universe x 5-window x 3-method
+    # run (causal discovery is a single-shot fit, not iterative epoch-based
+    # training — a fundamentally cheaper compute profile than this suite's
+    # neural-net engines). 60 min is generous headroom, not a tight fit.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run trainer
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python trainer.py
+      - name: Done
+        run: echo "Causal SCM run complete."
