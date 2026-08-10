@@ -253,11 +253,19 @@ def main():
                     }
 
             ranked = sorted(window_scores.items(), key=lambda kv: kv[1]["score"], reverse=True)
+            # Top-N picks are filtered to genuine OOS skill only (oos_r2 > 0)
+            # — a negative R² means the model is worse than guessing the
+            # mean, so it has no business being presented as a "top pick"
+            # even if it z-scores highly on causal_score. This can legitimately
+            # leave fewer than TOP_N entries, or none. full_ranking below is
+            # deliberately NOT filtered — it's the transparency view and
+            # keeps every ticker, negative R² included.
+            ranked_positive = [(t, v) for t, v in ranked if v["oos_r2"] > 0]
             top_etfs = [
                 {"ticker": t, "causal_score": _safe_float(v["score"]),
                  "method": v["method"], "oos_r2": _safe_float(v["oos_r2"]),
                  "low_sample": v["low_sample"]}
-                for t, v in ranked[:config.TOP_N]
+                for t, v in ranked_positive[:config.TOP_N]
             ]
             full_ranking = [[t, _safe_float(v["score"]), v["method"], v["low_sample"]]
                              for t, v in ranked]
@@ -271,6 +279,10 @@ def main():
             continue
 
         ranked_best = sorted(best.items(), key=lambda kv: kv[1]["score"], reverse=True)
+        # Same filter as Tab 2: top-N headline picks require genuine OOS
+        # skill (oos_r2 > 0). full_scores below stays unfiltered — every
+        # ticker, negative R² included — as the transparency view.
+        ranked_best_positive = [(t, v) for t, v in ranked_best if v["oos_r2"] > 0]
         top_etfs = [
             {
                 "ticker": t, "causal_score": _safe_float(v["score"]),
@@ -280,7 +292,7 @@ def main():
                 "oos_hit_rate": _safe_float(v["oos_hit_rate"]),
                 "low_sample": v["low_sample"],
             }
-            for t, v in ranked_best[:config.TOP_N]
+            for t, v in ranked_best_positive[:config.TOP_N]
         ]
         full_scores = {
             t: {
