@@ -139,3 +139,29 @@ TOP_N = 3
 # MIN_TRAIN_SAMPLES/MIN_TEST_SAMPLES gates (and the low_sample warning flag)
 # are what actually govern reliability from here.
 MIN_SAMPLES = 15
+
+# ── Signal persistence ──────────────────────────────────────────────────────
+# A (universe, window, ticker, method) combo only qualifies for the top-N
+# picks if it has shown POSITIVE OOS R² on this many CONSECUTIVE most-recent
+# daily runs, including today — not just today's snapshot. This exists
+# because a single lucky day is not evidence of a durable edge: XLF's OOS R²
+# for the exact same window/method swung from 0.0085 to 0.20 (24x) across
+# different ridge-alpha settings alone, which is exactly the kind of fragile,
+# single-day result this gate is meant to filter out before it's ever
+# presented as a "top pick." Since the streak check walks backward from the
+# most recent entry, requiring `qualifies=True` already implies today's own
+# R² is positive — no separate check needed.
+#
+# Cold-start note: for the first MIN_PERSISTENCE_DAYS-1 runs of a brand new
+# repo, NOTHING can qualify yet — there isn't enough history. This is
+# expected and surfaced explicitly by the dashboard (via history_days
+# in the JSON output), not hidden as an empty "no results" state.
+MIN_PERSISTENCE_DAYS = 3
+
+# How many days of daily history to retain in causal_scm_history.json before
+# trimming old entries. Bounds file growth; only the trailing
+# MIN_PERSISTENCE_DAYS matter for the streak check, but more history is kept
+# so the 📈 Signal Persistence dashboard tab can show a fuller track record.
+HISTORY_RETENTION_DAYS = 60
+
+HISTORY_FILENAME = "causal_scm_history.json"
