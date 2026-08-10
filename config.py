@@ -78,22 +78,21 @@ MAX_LAG = 2
 # added). Ridge bounds coefficients and keeps forecasts finite even when the
 # design matrix is rank-deficient. Intercept is never penalized.
 #
-# **This value was tuned, not guessed.** An initial default of 1.0 was found
-# (via real-data results, then confirmed by a synthetic sweep) to be ~100x
-# stronger than needed: it destroyed real signal (a known-good synthetic
-# causal-chain test dropped from R²=0.19 to R²=0.01) while providing ZERO
-# additional blowup protection over much smaller values — ETF/macro daily
-# returns are tiny-scale (~0.5-2% std), so a fixed alpha=1.0 completely
-# dominates the natural scale of X'X regardless of how large it gets past
-# that point. A sweep across alpha in [1e-8 .. 1.0] on both a blowup-risk
-# scenario (30 vars, 63d, pure noise) and a signal-preservation scenario
-# (known synthetic causal chain, returns-scale) found full blowup protection
-# kicks in at alpha≈0.003 and stays flat through at least alpha=0.05, while
-# signal preservation peaks around alpha=0.008-0.01. Re-validate against real
-# data with ridge_alpha_sweep.py before trusting this further — synthetic
-# tests validate the general principle, not what's truly optimal for this
-# specific data-generating process.
-RIDGE_ALPHA = 0.01
+# **This value was tuned against real data via ridge_alpha_sweep.py, not
+# guessed.** A synthetic sweep first suggested 0.01, but running the actual
+# sweep against real ETF/macro data (all 3 universes, windows 63/126/252,
+# alphas 0.003 to 1.0) showed something the synthetic test missed: blowup
+# protection was already fully saturated at the LOWEST alpha tested
+# (worst_r2 = -1.139, identical across every alpha from 0.003 to 1.0 — no
+# additional stability benefit from going higher). Given that, signal
+# preservation is the only thing that should decide the value, and 0.003
+# clearly wins: 10 (ticker, window, method) combinations exceeded R² > 0.05
+# at alpha=0.003, vs. only 2 at alpha=1.0, with the single best result
+# dropping from R²=0.214 to R²=0.107 as alpha increased. Re-run
+# ridge_alpha_sweep.py periodically (data changes) or if you widen the
+# universe/window/lag settings enough to change the rank-deficiency risk
+# profile — the right alpha is a property of the data, not a fixed constant.
+RIDGE_ALPHA = 0.003
 
 # ── Train/test split for the OOS "which method actually works" validation ──────
 # Chronological split within each window — same discipline as the sentiment
