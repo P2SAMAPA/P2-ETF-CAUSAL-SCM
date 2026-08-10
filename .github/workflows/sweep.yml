@@ -1,0 +1,36 @@
+name: Ridge Alpha Sweep (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      alphas:
+        description: "Comma-separated alpha candidates"
+        required: false
+        default: "0.003,0.01,0.03,0.1,1.0"
+      windows:
+        description: "Comma-separated windows to test (blank = all of config.WINDOWS)"
+        required: false
+        default: "63,126,252"
+
+jobs:
+  sweep:
+    name: Sweep RIDGE_ALPHA against real data
+    runs-on: ubuntu-latest
+    # 5 alphas x 3 windows is a fraction of a full trainer.py run's scope;
+    # generous headroom still applies if you widen --windows via the input.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run sweep
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python ridge_alpha_sweep.py \
+            --alphas "${{ github.event.inputs.alphas }}" \
+            --windows "${{ github.event.inputs.windows }}"
