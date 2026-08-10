@@ -18,7 +18,32 @@ For every universe × window:
   5. Per ticker, "best window" = whichever window had the best OOS R² for
      that ticker's winning method — a genuine backtested-skill pick, not an
      in-sample one.
-  6. Build three JSON result files and upload them.
+  6. Record today's OOS R² for every (universe, window, ticker, method) into
+     a rolling history file, then gate the top-N picks (Tabs 1 & 2) to only
+     combos with a proven streak — positive OOS R² on
+     config.MIN_PERSISTENCE_DAYS CONSECUTIVE most-recent runs, including
+     today. A single lucky day is not enough on its own.
+  7. Build four JSON result files (+ the history file) and upload them.
+
+JSON schema — Tab 4 (causal_scm_persistence_YYYY-MM-DD.json) — track record
+--------------------------------------------------------------------------------
+{
+  "run_date": "YYYY-MM-DD", "history_days": 12, "min_persistence_days": 3,
+  "universes": {
+    "FI_COMMODITIES": {
+      "windows": {
+        "63": {
+          "TLT": {
+            "varlingam": {"streak": 2, "days_tracked": 8, "qualifies": false, "latest_r2": 0.03},
+            "pcmci":     {...},
+            "timino":    {...}
+          },
+          ...
+        }
+      }
+    }
+  }
+}
 
 JSON schema — Tab 1 (causal_scm_YYYY-MM-DD.json) — best window+method per ETF
 --------------------------------------------------------------------------------
@@ -83,6 +108,7 @@ import pandas as pd
 import config
 import data_manager
 import push_results
+import persistence
 import causal_scm as cs
 
 logging.basicConfig(
@@ -163,6 +189,10 @@ def main():
     prices, macro = data_manager.load_master_data(hf_token=token)
     data_manager.validate_data(prices, macro)
 
+    history = persistence.load_history()
+    logger.info(f"Loaded persistence history: {persistence.history_days_available(history)} "
+                f"prior day(s) on record")
+
     # results[universe][window][ticker][method] = {...}
     results: dict = {}
 
@@ -177,8 +207,12 @@ def main():
 
             if win_result:
                 logger.info(f"    → {len(win_result)} tickers scored")
+                persistence.record_day(history, run_date, universe_name, window, win_result)
             else:
                 logger.warning(f"    → no results for {universe_name} w={window}")
+
+    persistence.record_run_date(history, run_date)
+    history_days = persistence.history_days_available(history)
 
     # ── Cross-sectional z-scoring of live forecasts, per universe per window,
     #    per method — so scores are comparable within a snapshot, same
@@ -194,21 +228,23 @@ def main():
             return {t: 0.0 for t in vals}
         return {t: float((v - mu) / sd) for t, v in vals.items()}
 
-    # ── Tab 1 + Tab 2 + Tab 3 payload construction ────────────────────────
-    tab1_universes, tab2_universes, tab3_universes = {}, {}, {}
+    # ── Tab 1 + Tab 2 + Tab 3 + Tab 4 payload construction ─────────────────
+    tab1_universes, tab2_universes, tab3_universes, tab4_universes = {}, {}, {}, {}
 
     for universe_name, tickers in config.UNIVERSES.items():
         # best (window, method) per ticker by OOS R² — genuine backtested skill
-        best = {}  # ticker -> {window, method, oos_r2, oos_correlation, oos_hit_rate, score}
+        best = {}  # ticker -> {window, method, oos_r2, oos_correlation, oos_hit_rate, score, streak, days_tracked, qualifies}
 
         windows_out = {}
         methods_out = {}
+        persistence_out = {}
 
         for window in config.WINDOWS:
             win_result = results[universe_name].get(window, {})
             if not win_result:
                 windows_out[str(window)] = {"top_etfs": [], "full_ranking": []}
                 methods_out[str(window)] = {}
+                persistence_out[str(window)] = {}
                 continue
 
             methods_out[str(window)] = {
@@ -217,11 +253,24 @@ def main():
                 for t, r in win_result.items()
             }
 
+            # Persistence table for this window: every (ticker, method) that
+            # was scored today, with its streak/days_tracked/qualifies —
+            # this IS Tab 4's content, and it's built here (not filtered)
+            # so the dashboard can show the full track record, not just
+            # whichever combo happened to win today.
+            persistence_out[str(window)] = {
+                t: {
+                    m: persistence.compute_streak(history, universe_name, window, t, m)
+                    for m in config.CAUSAL_METHODS if m in r
+                }
+                for t, r in win_result.items()
+            }
+
             zscores_by_method = {
                 m: _zscore_method_forecasts(win_result, m) for m in config.CAUSAL_METHODS
             }
 
-            window_scores = {}  # ticker -> (score, method, oos_r2, oos_corr, oos_hit, low_sample)
+            window_scores = {}  # ticker -> {score, method, oos_r2, oos_corr, oos_hit, low_sample, streak, days_tracked, qualifies}
             for ticker, r in win_result.items():
                 candidates = []
                 for m in config.CAUSAL_METHODS:
@@ -237,52 +286,65 @@ def main():
                 # see README for why: transparency over a heuristic tie-break)
                 candidates.sort(key=lambda c: c[0], reverse=True)
                 oos_r2, method, z, oos_corr, oos_hit, low_sample = candidates[0]
+                streak_info = persistence.compute_streak(history, universe_name, window, ticker, method)
                 window_scores[ticker] = {
                     "score": z, "method": method, "oos_r2": oos_r2,
                     "oos_correlation": oos_corr, "oos_hit_rate": oos_hit,
                     "low_sample": low_sample,
+                    "streak": streak_info["streak"], "days_tracked": streak_info["days_tracked"],
+                    "qualifies": streak_info["qualifies"],
                 }
 
-                # track global best window for this ticker
+                # track global best window for this ticker (by raw OOS R² —
+                # the persistence gate is applied afterward, when building
+                # top_etfs below, same 2-stage pattern as the low_sample flag)
                 prev = best.get(ticker)
                 if prev is None or oos_r2 > prev["oos_r2"]:
                     best[ticker] = {
                         "window": window, "method": method, "score": z,
                         "oos_r2": oos_r2, "oos_correlation": oos_corr,
                         "oos_hit_rate": oos_hit, "low_sample": low_sample,
+                        "streak": streak_info["streak"], "days_tracked": streak_info["days_tracked"],
+                        "qualifies": streak_info["qualifies"],
                     }
 
             ranked = sorted(window_scores.items(), key=lambda kv: kv[1]["score"], reverse=True)
-            # Top-N picks are filtered to genuine OOS skill only (oos_r2 > 0)
-            # — a negative R² means the model is worse than guessing the
-            # mean, so it has no business being presented as a "top pick"
-            # even if it z-scores highly on causal_score. This can legitimately
-            # leave fewer than TOP_N entries, or none. full_ranking below is
-            # deliberately NOT filtered — it's the transparency view and
-            # keeps every ticker, negative R² included.
-            ranked_positive = [(t, v) for t, v in ranked if v["oos_r2"] > 0]
+            # Top-N picks require PERSISTENCE, not just today's oos_r2 > 0:
+            # a combo only qualifies if it's shown positive OOS R² on
+            # config.MIN_PERSISTENCE_DAYS CONSECUTIVE most-recent days,
+            # including today (which already implies today's R² > 0 — see
+            # persistence.compute_streak). This can legitimately leave fewer
+            # than TOP_N entries, or none — especially in the first
+            # MIN_PERSISTENCE_DAYS-1 runs of a new repo, before enough
+            # history has accumulated (see history_days below, surfaced to
+            # the dashboard so this reads as "still building history," not
+            # a silent bug). full_ranking stays completely unfiltered — every
+            # ticker, negative R² and non-persistent combos included — as
+            # the transparency view.
+            ranked_qualified = [(t, v) for t, v in ranked if v["qualifies"]]
             top_etfs = [
                 {"ticker": t, "causal_score": _safe_float(v["score"]),
                  "method": v["method"], "oos_r2": _safe_float(v["oos_r2"]),
-                 "low_sample": v["low_sample"]}
-                for t, v in ranked_positive[:config.TOP_N]
+                 "low_sample": v["low_sample"], "streak": v["streak"],
+                 "days_tracked": v["days_tracked"]}
+                for t, v in ranked_qualified[:config.TOP_N]
             ]
-            full_ranking = [[t, _safe_float(v["score"]), v["method"], v["low_sample"]]
+            full_ranking = [[t, _safe_float(v["score"]), v["method"], v["low_sample"],
+                              v["streak"], v["qualifies"]]
                              for t, v in ranked]
             windows_out[str(window)] = {"top_etfs": top_etfs, "full_ranking": full_ranking}
 
         tab2_universes[universe_name] = {"windows": windows_out}
         tab3_universes[universe_name] = {"windows": methods_out}
+        tab4_universes[universe_name] = {"windows": persistence_out}
 
         if not best:
             tab1_universes[universe_name] = {"top_etfs": [], "full_scores": {}}
             continue
 
         ranked_best = sorted(best.items(), key=lambda kv: kv[1]["score"], reverse=True)
-        # Same filter as Tab 2: top-N headline picks require genuine OOS
-        # skill (oos_r2 > 0). full_scores below stays unfiltered — every
-        # ticker, negative R² included — as the transparency view.
-        ranked_best_positive = [(t, v) for t, v in ranked_best if v["oos_r2"] > 0]
+        # Same persistence gate as Tab 2. full_scores below stays unfiltered.
+        ranked_best_qualified = [(t, v) for t, v in ranked_best if v["qualifies"]]
         top_etfs = [
             {
                 "ticker": t, "causal_score": _safe_float(v["score"]),
@@ -291,8 +353,9 @@ def main():
                 "oos_correlation": _safe_float(v["oos_correlation"]),
                 "oos_hit_rate": _safe_float(v["oos_hit_rate"]),
                 "low_sample": v["low_sample"],
+                "streak": v["streak"], "days_tracked": v["days_tracked"],
             }
-            for t, v in ranked_best_positive[:config.TOP_N]
+            for t, v in ranked_best_qualified[:config.TOP_N]
         ]
         full_scores = {
             t: {
@@ -302,30 +365,45 @@ def main():
                 "oos_correlation": _safe_float(v["oos_correlation"]),
                 "oos_hit_rate": _safe_float(v["oos_hit_rate"]),
                 "low_sample": v["low_sample"],
+                "streak": v["streak"], "days_tracked": v["days_tracked"],
+                "qualifies": v["qualifies"],
             }
             for t, v in ranked_best
         }
         tab1_universes[universe_name] = {"top_etfs": top_etfs, "full_scores": full_scores}
 
-        logger.info(f"  {universe_name} top {config.TOP_N}: "
+        logger.info(f"  {universe_name} top {config.TOP_N} (persistence-qualified): "
                     f"{[e['ticker'] for e in top_etfs]}")
 
-    tab1_payload = {"run_date": run_date, "universes": tab1_universes}
-    tab2_payload = {"run_date": run_date, "universes": tab2_universes}
+    tab1_payload = {"run_date": run_date, "history_days": history_days, "universes": tab1_universes}
+    tab2_payload = {"run_date": run_date, "history_days": history_days, "universes": tab2_universes}
     tab3_payload = {"run_date": run_date, "universes": tab3_universes}
+    tab4_payload = {
+        "run_date": run_date, "history_days": history_days,
+        "min_persistence_days": config.MIN_PERSISTENCE_DAYS,
+        "universes": tab4_universes,
+    }
 
     tab1_path = Path(f"causal_scm_{run_date}.json")
     tab2_path = Path(f"causal_scm_windows_{run_date}.json")
     tab3_path = Path(f"causal_scm_methods_{run_date}.json")
+    tab4_path = Path(f"causal_scm_persistence_{run_date}.json")
+    history_path = Path(config.HISTORY_FILENAME)
 
-    for path, payload in [(tab1_path, tab1_payload), (tab2_path, tab2_payload), (tab3_path, tab3_payload)]:
+    for path, payload in [(tab1_path, tab1_payload), (tab2_path, tab2_payload),
+                           (tab3_path, tab3_payload), (tab4_path, tab4_payload)]:
         with open(path, "w") as f:
             json.dump(payload, f, indent=2)
         logger.info(f"Wrote {path}")
 
+    persistence.save_history(history, history_path)
+    logger.info(f"Wrote {history_path} ({history_days} day(s) of history)")
+
     push_results.push_daily_result(tab1_path)
     push_results.push_daily_result(tab2_path)
     push_results.push_daily_result(tab3_path)
+    push_results.push_daily_result(tab4_path)
+    push_results.push_daily_result(history_path)
 
     logger.info("=== Done ===")
 
