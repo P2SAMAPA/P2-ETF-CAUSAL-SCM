@@ -112,6 +112,7 @@ with st.expander("🔧 Debug: what the dashboard sees on HuggingFace", expanded=
 tab1_path = find_latest(files, "causal_scm_2")
 tab2_path = find_latest(files, "causal_scm_windows_")
 tab3_path = find_latest(files, "causal_scm_methods_")
+tab4_path = find_latest(files, "causal_scm_persistence_")
 
 if not tab1_path:
     if list_error:
@@ -130,12 +131,19 @@ if "error" in data1:
 
 data2 = load_json(tab2_path) if tab2_path else None
 data3 = load_json(tab3_path) if tab3_path else None
+data4 = load_json(tab4_path) if tab4_path else None
 
 universes1 = data1["universes"]
 universes2 = data2["universes"] if data2 and "error" not in data2 else None
 universes3 = data3["universes"] if data3 and "error" not in data3 else None
+universes4 = data4["universes"] if data4 and "error" not in data4 else None
+
+history_days = data1.get("history_days", 0)
+min_persistence_days = data4.get("min_persistence_days", config.MIN_PERSISTENCE_DAYS) if data4 else config.MIN_PERSISTENCE_DAYS
 
 st.sidebar.markdown(f"**Run date:** `{data1.get('run_date','?')}`")
+st.sidebar.markdown(f"**History:** {history_days} day(s) tracked")
+st.sidebar.markdown(f"**Persistence gate:** {min_persistence_days} consecutive positive day(s)")
 
 UNIVERSE_ORDER = ["FI_COMMODITIES", "EQUITY_SECTORS", "COMBINED"]
 UNIVERSE_LABELS = {
@@ -144,10 +152,11 @@ UNIVERSE_LABELS = {
     "COMBINED": "🌐 Combined",
 }
 
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "🏆 Best Window & Method per ETF",
     "🔍 Explore by Window",
     "🧪 Method Comparison",
+    "📈 Signal Persistence",
 ])
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -199,13 +208,22 @@ shifted mid-window.
         st.markdown(f'<div class="uni-title">{label}</div>', unsafe_allow_html=True)
 
         if not top_etfs:
-            st.info(
-                f"No ETFs in {label} currently show positive out-of-sample skill "
-                "(OOS R² > 0) at any window/method combination. Shown honestly "
-                "rather than padding the list with picks that have no genuine "
-                "predictive value — see the full ranking below for every "
-                "ticker's actual numbers."
-            )
+            if history_days < min_persistence_days:
+                st.info(
+                    f"📊 **Building history**: {history_days}/{min_persistence_days} day(s) "
+                    f"tracked so far. Top picks require {min_persistence_days} consecutive "
+                    "days of positive out-of-sample skill, not just today's snapshot — "
+                    "nothing can qualify yet. Check back once more daily runs have "
+                    "accumulated, or see the full ranking below for today's raw numbers."
+                )
+            else:
+                st.info(
+                    f"No ETFs in {label} currently show a persistent, out-of-sample "
+                    f"positive track record ({min_persistence_days}+ consecutive days). "
+                    "Shown honestly rather than padding the list with one-off picks — "
+                    "see the full ranking below, or the 📈 Signal Persistence tab for "
+                    "the complete track record."
+                )
         else:
             cols = st.columns(3)
             for idx, etf in enumerate(top_etfs):
@@ -215,6 +233,8 @@ shifted mid-window.
                         f'<div class="score">causal score = {etf["causal_score"]:+.4f}</div>',
                         f'<div class="score">{method_badge(etf["best_method"])}</div>',
                         f'<div class="score">OOS R\u00b2 = {etf["oos_r2"]:.3f} \u00b7 window = {etf["best_window"]}d</div>',
+                        f'<div class="score">\U0001F525 {etf.get("streak", 0)}-day streak '
+                        f'(of {etf.get("days_tracked", 0)} tracked)</div>',
                     ]
                     if etf.get("low_sample"):
                         divs.append(
@@ -236,6 +256,9 @@ shifted mid-window.
                     "OOS R²": info["oos_r2"],
                     "OOS Correlation": info["oos_correlation"],
                     "OOS Hit Rate": info["oos_hit_rate"],
+                    "Streak (days)": info.get("streak", 0),
+                    "Days Tracked": info.get("days_tracked", 0),
+                    "✅ Persistent": "yes" if info.get("qualifies") else "",
                     "⚠️ Low Sample": "yes" if info.get("low_sample") else "",
                 } for t, info in full.items()]
                 df = pd.DataFrame(rows).sort_values("Causal Score", ascending=False)
@@ -299,11 +322,18 @@ assumption on top of being far more expensive to fit.
 
         top_etfs = win_data.get("top_etfs", [])
         if not top_etfs:
-            st.info(
-                f"No ETFs in {label} at {selected_win}d currently show positive "
-                "out-of-sample skill (OOS R² > 0). See the full ranking below "
-                "for every ticker's actual numbers."
-            )
+            if history_days < min_persistence_days:
+                st.info(
+                    f"📊 Building history: {history_days}/{min_persistence_days} day(s) "
+                    "tracked — top picks require consecutive positive days, not just "
+                    "today. See the full ranking below for today's raw numbers."
+                )
+            else:
+                st.info(
+                    f"No ETFs in {label} at {selected_win}d currently show a persistent "
+                    f"track record ({min_persistence_days}+ consecutive positive days). "
+                    "See the full ranking below."
+                )
         else:
             cols = st.columns(3)
             for idx, etf in enumerate(top_etfs):
@@ -313,6 +343,7 @@ assumption on top of being far more expensive to fit.
                         f'<div class="score">causal score = {etf["causal_score"]:+.4f}</div>',
                         f'<div class="score">{method_badge(etf["method"])}</div>',
                         f'<div class="score">OOS R\u00b2 = {etf["oos_r2"]:.3f}</div>',
+                        f'<div class="score">\U0001F525 {etf.get("streak", 0)}-day streak</div>',
                     ]
                     if etf.get("low_sample"):
                         divs.append('<div class="score" style="color:#ffb703">⚠️ low sample</div>')
@@ -322,16 +353,23 @@ assumption on top of being far more expensive to fit.
         with st.expander(f"📋 Full ranking — {label} @ {selected_win}d"):
             rows = win_data.get("full_ranking", [])
             if rows:
-                # Defensive against schema drift: older result JSON (from
-                # before the low_sample flag existed) has 3-element rows
-                # [ticker, score, method]; current trainer.py writes 4
-                # [ticker, score, method, low_sample]. Pad rather than crash
-                # if a stale JSON file is ever loaded against this dashboard
-                # version.
-                normalized = [r + [False] if len(r) == 3 else r for r in rows]
-                df = pd.DataFrame(normalized, columns=["ETF", "Causal Score", "Method", "Low Sample"])
+                # Defensive against schema drift across trainer.py versions:
+                # 3-element [ticker, score, method] (earliest), 4-element
+                # [..., low_sample] (added with the ridge-fix release), or
+                # current 6-element [..., streak, qualifies]. Pad rather
+                # than crash if an older JSON file is ever loaded against
+                # this dashboard version.
+                def _normalize(r):
+                    r = list(r)
+                    defaults = [None, None, None, False, 0, False]  # ticker/score/method have no default
+                    return r + defaults[len(r):6]
+                normalized = [_normalize(r) for r in rows]
+                df = pd.DataFrame(normalized, columns=[
+                    "ETF", "Causal Score", "Method", "Low Sample", "Streak", "Persistent"
+                ])
                 df["Method"] = df["Method"].map(lambda m: config.METHOD_LABELS.get(m, m))
                 df["Low Sample"] = df["Low Sample"].map(lambda b: "⚠️ yes" if b else "")
+                df["Persistent"] = df["Persistent"].map(lambda b: "✅ yes" if b else "")
                 df.insert(0, "Rank", range(1, len(df) + 1))
                 st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -420,4 +458,95 @@ catch.
         st.caption(
             f"Run date: {data3.get('run_date','?')} · "
             "Chronological train/test split per window · frozen structure walked forward through test."
+        )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 4 — Signal Persistence
+# ══════════════════════════════════════════════════════════════════════════════
+with tab4:
+    st.header("📈 Signal Persistence — Is This a Real Edge or a Lucky Day?")
+
+    st.markdown(f"""
+Every other tab shows a single day's snapshot. This tab is why the top-N
+picks on Tabs 1 & 2 are gated the way they are: a (ticker, window, method)
+combination only earns a "top pick" label once it has shown **positive
+out-of-sample R² on {min_persistence_days} consecutive most-recent daily
+runs, including today** — not just today's number.
+
+This exists because a single day is not evidence of a durable edge. During
+this engine's development, the exact same window/method combination for one
+ticker showed OOS R² of 0.0085 on one day's ridge-regularization setting and
+0.20 on another — a 24x swing from a hyperparameter choice alone, with
+nothing about the actual market changing in between. Persistence — the same
+combination showing up positive, day after day — is a much stronger signal
+than any single day's R², however good it looks.
+    """)
+
+    st.info(
+        f"📊 **History status**: {history_days} day(s) tracked so far "
+        f"(gate requires {min_persistence_days}). "
+        + ("Persistence-qualified picks are now possible." if history_days >= min_persistence_days
+           else "Top-N picks on Tabs 1 & 2 will stay empty until enough history accumulates — "
+                "this is expected, not a bug.")
+    )
+
+    if not universes4:
+        st.info("No persistence data found yet. Run `trainer.py` to populate this tab.")
+    else:
+        for universe_name in UNIVERSE_ORDER:
+            label = UNIVERSE_LABELS.get(universe_name, universe_name)
+            uni_data = universes4.get(universe_name, {})
+            windows_data = uni_data.get("windows", {})
+            if not windows_data:
+                continue
+
+            st.markdown(f'<div class="uni-title">{label}</div>', unsafe_allow_html=True)
+
+            win_options = sorted([int(w) for w in windows_data.keys()])
+            sel = st.selectbox(
+                "Window", options=win_options, format_func=lambda w: f"{w}d",
+                key=f"persist_win_{universe_name}",
+            )
+            detail = windows_data.get(str(sel), {})
+
+            if not detail:
+                st.info(f"No tickers had enough data for {sel}d in this universe.")
+                st.divider()
+                continue
+
+            rows = []
+            for ticker, methods in detail.items():
+                for m in config.CAUSAL_METHODS:
+                    if m not in methods:
+                        continue
+                    d = methods[m]
+                    rows.append({
+                        "ETF": ticker,
+                        "Method": config.METHOD_LABELS.get(m, m),
+                        "Current Streak": d["streak"],
+                        "Days Tracked": d["days_tracked"],
+                        "Qualifies": "✅ yes" if d["qualifies"] else "",
+                        "Latest R²": d["latest_r2"] if d["latest_r2"] is not None else float("nan"),
+                    })
+
+            if rows:
+                df = pd.DataFrame(rows).sort_values(
+                    ["Current Streak", "Latest R²"], ascending=[False, False]
+                )
+                st.dataframe(
+                    df.style.format({"Latest R²": "{:.3f}"}),
+                    use_container_width=True, hide_index=True,
+                )
+                n_qualified = (df["Qualifies"] != "").sum()
+                st.caption(
+                    f"{n_qualified} of {len(df)} (ticker, method) combination(s) "
+                    f"at {sel}d currently qualify (streak ≥ {min_persistence_days} days)."
+                )
+
+            st.divider()
+
+        st.caption(
+            f"Run date: {data4.get('run_date','?')} · "
+            f"History retained: up to {config.HISTORY_RETENTION_DAYS} days · "
+            "Streak = consecutive most-recent days with OOS R² > 0, walking backward from today."
         )
