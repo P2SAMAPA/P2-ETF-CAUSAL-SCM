@@ -139,7 +139,13 @@ universes3 = data3["universes"] if data3 and "error" not in data3 else None
 universes4 = data4["universes"] if data4 and "error" not in data4 else None
 
 history_days = data1.get("history_days", 0)
-min_persistence_days = data4.get("min_persistence_days", config.MIN_PERSISTENCE_DAYS) if data4 else config.MIN_PERSISTENCE_DAYS
+# getattr with a fallback: if config.py on this deployment predates the
+# persistence feature (missing MIN_PERSISTENCE_DAYS), don't crash the whole
+# app over it — fall back to the JSON's own value, or a sane default. Same
+# defensive principle as the full_ranking schema-drift fix earlier: a
+# version mismatch between two files should degrade, not crash.
+_default_min_persistence = getattr(config, "MIN_PERSISTENCE_DAYS", 3)
+min_persistence_days = data4.get("min_persistence_days", _default_min_persistence) if data4 else _default_min_persistence
 
 st.sidebar.markdown(f"**Run date:** `{data1.get('run_date','?')}`")
 st.sidebar.markdown(f"**History:** {history_days} day(s) tracked")
@@ -547,6 +553,6 @@ than any single day's R², however good it looks.
 
         st.caption(
             f"Run date: {data4.get('run_date','?')} · "
-            f"History retained: up to {config.HISTORY_RETENTION_DAYS} days · "
+            f"History retained: up to {getattr(config, 'HISTORY_RETENTION_DAYS', 60)} days · "
             "Streak = consecutive most-recent days with OOS R² > 0, walking backward from today."
         )
