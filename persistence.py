@@ -90,21 +90,50 @@ def record_day(history: dict, run_date: str, universe: str, window: int,
                 ticker_node[method] = entries[-config.HISTORY_RETENTION_DAYS:]
 
 
-def record_run_date(history: dict, run_date: str) -> None:
-    """Track every calendar date trainer.py has run, independent of any
-    specific ticker/window/method — this is what lets the dashboard tell
-    'cold start, not enough history yet' apart from 'ran fine, nothing
-    persistent today'."""
-    meta = history.setdefault("_meta", {"run_dates": []})
-    dates = meta.setdefault("run_dates", [])
-    if not dates or dates[-1] != run_date:
-        dates.append(run_date)
-    if len(dates) > config.HISTORY_RETENTION_DAYS:
-        meta["run_dates"] = dates[-config.HISTORY_RETENTION_DAYS:]
+def record_run_date(history: dict, run_date: str, data_latest_date: str) -> dict:
+    """
+    Track every calendar date trainer.py has run AND the latest date present
+    in the underlying price data at that run, independent of any specific
+    ticker/window/method.
+
+    Returns {"is_new_data": bool} — False means the underlying master
+    dataset's latest date hasn't advanced since the last run (e.g. the data
+    pipeline hasn't refreshed yet, or trainer.py was re-triggered same-day).
+    Caller (trainer.py) should skip calling record_day() entirely when
+    is_new_data is False — recording a "day" against stale data would
+    silently inflate persistence streaks with a duplicate observation
+    instead of a genuine new one. This was found directly: a method with a
+    fully deterministic fit (PCMCI) produced bit-for-bit identical OOS R²
+    across two different calendar run dates — the only way that happens is
+    if the input data was byte-identical, meaning no new trading day had
+    actually landed in the master dataset between those two runs.
+    """
+    meta = history.setdefault("_meta", {"run_dates": [], "data_dates": []})
+    run_dates = meta.setdefault("run_dates", [])
+    data_dates = meta.setdefault("data_dates", [])
+
+    last_data_date = data_dates[-1] if data_dates else None
+    is_new_data = (last_data_date != data_latest_date)
+
+    if not run_dates or run_dates[-1] != run_date:
+        run_dates.append(run_date)
+    if not data_dates or data_dates[-1] != data_latest_date:
+        data_dates.append(data_latest_date)
+
+    if len(run_dates) > config.HISTORY_RETENTION_DAYS:
+        meta["run_dates"] = run_dates[-config.HISTORY_RETENTION_DAYS:]
+    if len(data_dates) > config.HISTORY_RETENTION_DAYS:
+        meta["data_dates"] = data_dates[-config.HISTORY_RETENTION_DAYS:]
+
+    return {"is_new_data": is_new_data, "last_data_date": last_data_date}
 
 
 def history_days_available(history: dict) -> int:
-    return len(history.get("_meta", {}).get("run_dates", []))
+    """Counts genuinely distinct DATA days (data_dates), not calendar run
+    days (run_dates) — a run against stale/unchanged underlying data
+    doesn't count toward the persistence gate. See record_run_date's
+    docstring for why this distinction matters."""
+    return len(history.get("_meta", {}).get("data_dates", []))
 
 
 def compute_streak(history: dict, universe: str, window: int, ticker: str,
