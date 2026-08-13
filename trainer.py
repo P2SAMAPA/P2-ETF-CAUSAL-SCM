@@ -19,10 +19,15 @@ For every universe × window:
      that ticker's winning method — a genuine backtested-skill pick, not an
      in-sample one.
   6. Record today's OOS R² for every (universe, window, ticker, method) into
-     a rolling history file, then gate the top-N picks (Tabs 1 & 2) to only
-     combos with a proven streak — positive OOS R² on
-     config.MIN_PERSISTENCE_DAYS CONSECUTIVE most-recent runs, including
-     today. A single lucky day is not enough on its own.
+     a rolling history file — but ONLY if the underlying master data's
+     latest date has genuinely advanced since the last run (a run against
+     stale/unrefreshed data is skipped for history purposes, logged as a
+     warning, so a duplicate-data re-run can't silently inflate a streak).
+     Then gate the top-N picks (Tabs 1 & 2) to only combos with a proven
+     streak — positive OOS R² on config.MIN_PERSISTENCE_DAYS CONSECUTIVE
+     genuinely-new-data days, including today. A single lucky day is not
+     enough on its own, and neither is the same day's data scored twice
+     under different calendar labels.
   7. Build four JSON result files (+ the history file) and upload them.
 
 JSON schema — Tab 4 (causal_scm_persistence_YYYY-MM-DD.json) — track record
@@ -189,9 +194,24 @@ def main():
     prices, macro = data_manager.load_master_data(hf_token=token)
     data_manager.validate_data(prices, macro)
 
+    data_latest_date = str(prices.index[-1].date())
+
     history = persistence.load_history()
+    run_info = persistence.record_run_date(history, run_date, data_latest_date)
+    is_new_data = run_info["is_new_data"]
+
+    if not is_new_data:
+        logger.warning(
+            f"⚠️  Underlying master data's latest date ({data_latest_date}) hasn't "
+            f"advanced since the last run ({run_info['last_data_date']}) — the data "
+            "pipeline likely hasn't refreshed yet, or this run was re-triggered "
+            "same-day. Persistence history will NOT be updated this run, to avoid "
+            "inflating streaks with a duplicate observation on data already scored. "
+            "Today's snapshot (Tabs 1-3) still reflects this run normally."
+        )
+
     logger.info(f"Loaded persistence history: {persistence.history_days_available(history)} "
-                f"prior day(s) on record")
+                f"genuine data day(s) on record")
 
     # results[universe][window][ticker][method] = {...}
     results: dict = {}
@@ -207,11 +227,11 @@ def main():
 
             if win_result:
                 logger.info(f"    → {len(win_result)} tickers scored")
-                persistence.record_day(history, run_date, universe_name, window, win_result)
+                if is_new_data:
+                    persistence.record_day(history, run_date, universe_name, window, win_result)
             else:
                 logger.warning(f"    → no results for {universe_name} w={window}")
 
-    persistence.record_run_date(history, run_date)
     history_days = persistence.history_days_available(history)
 
     # ── Cross-sectional z-scoring of live forecasts, per universe per window,
