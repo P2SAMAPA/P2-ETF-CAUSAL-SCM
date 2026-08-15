@@ -340,8 +340,21 @@ def main():
             # the dashboard so this reads as "still building history," not
             # a silent bug). full_ranking stays completely unfiltered — every
             # ticker, negative R² and non-persistent combos included — as
-            # the transparency view.
-            ranked_qualified = [(t, v) for t, v in ranked if v["qualifies"]]
+            # the transparency view, and stays sorted by causal_score (the
+            # raw signal ranking).
+            #
+            # Among QUALIFIED combos, top_etfs is sorted by OOS R² — NOT by
+            # causal_score. causal_score is a z-scored predicted-MOVE
+            # magnitude; it says nothing about how much to trust the
+            # prediction. Sorting the headline picks by magnitude let a
+            # barely-qualifying combo (R²=0.008, large predicted move)
+            # outrank the most reliable combo found anywhere in this
+            # engine's testing (IWD: R²=0.11, 71% hit rate, 4-day streak,
+            # but a modest predicted move) — backwards from the entire
+            # point of the persistence gate. R² measures reliability
+            # directly; that's what should decide which 3 cards get shown.
+            qualified = [(t, v) for t, v in ranked if v["qualifies"]]
+            ranked_qualified = sorted(qualified, key=lambda kv: kv[1]["oos_r2"], reverse=True)
             top_etfs = [
                 {"ticker": t, "causal_score": _safe_float(v["score"]),
                  "method": v["method"], "oos_r2": _safe_float(v["oos_r2"]),
@@ -363,8 +376,12 @@ def main():
             continue
 
         ranked_best = sorted(best.items(), key=lambda kv: kv[1]["score"], reverse=True)
-        # Same persistence gate as Tab 2. full_scores below stays unfiltered.
-        ranked_best_qualified = [(t, v) for t, v in ranked_best if v["qualifies"]]
+        # Same fix as Tab 2: among combos that pass the persistence gate,
+        # rank by OOS R² (trustworthiness) rather than causal_score
+        # (predicted-move magnitude). full_scores below stays unfiltered
+        # and sorted by causal_score — the transparency view.
+        qualified_best = [(t, v) for t, v in ranked_best if v["qualifies"]]
+        ranked_best_qualified = sorted(qualified_best, key=lambda kv: kv[1]["oos_r2"], reverse=True)
         top_etfs = [
             {
                 "ticker": t, "causal_score": _safe_float(v["score"]),
