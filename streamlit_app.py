@@ -59,7 +59,7 @@ METHOD_BADGE_CLASS = {
 }
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=300)
 def list_repo_files():
     fs = HfFileSystem(token=HF_TOKEN or None)
     try:
@@ -74,7 +74,7 @@ def find_latest(files, prefix):
     return matches[0] if matches else None
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=300)
 def load_json(path):
     fs = HfFileSystem(token=HF_TOKEN or None)
     try:
@@ -91,6 +91,9 @@ def method_badge(method: str) -> str:
 
 
 st.sidebar.markdown("## ⇢ Causal SCM")
+if st.sidebar.button("🔄 Refresh data now", help="Bypasses the 5-minute cache — use right after a trainer.py run"):
+    st.cache_data.clear()
+    st.rerun()
 st.sidebar.markdown(f"**Next Trading Day:** `{next_trading_day()}`")
 st.sidebar.markdown(f"**Windows:** {config.WINDOWS}")
 st.sidebar.markdown(f"**Max lag:** {config.MAX_LAG}d")
@@ -475,17 +478,27 @@ with tab4:
     st.markdown(f"""
 Every other tab shows a single day's snapshot. This tab is why the top-N
 picks on Tabs 1 & 2 are gated the way they are: a (ticker, window, method)
-combination only earns a "top pick" label once it has shown **positive
-out-of-sample R² on {min_persistence_days} consecutive most-recent daily
-runs, including today** — not just today's number.
+combination only earns a "top pick" label once it clears **two** separate
+bars — not one:
 
-This exists because a single day is not evidence of a durable edge. During
-this engine's development, the exact same window/method combination for one
-ticker showed OOS R² of 0.0085 on one day's ridge-regularization setting and
-0.20 on another — a 24x swing from a hyperparameter choice alone, with
-nothing about the actual market changing in between. Persistence — the same
-combination showing up positive, day after day — is a much stronger signal
-than any single day's R², however good it looks.
+1. **Persistence** — positive out-of-sample R² on {min_persistence_days}
+   consecutive most-recent daily runs, including today, not just today's
+   number.
+2. **Adequate sample size** — not flagged ⚠️ low sample (see the
+   🧪 Method Comparison tab). A streak built on a statistically unreliable
+   per-day estimate isn't made trustworthy by being unreliable in the same
+   direction for a few days in a row.
+
+Both bars exist because of things this engine actually did, not
+hypothetically: the exact same window/method combination for one ticker
+showed OOS R² of 0.0085 on one day's ridge-regularization setting and 0.20
+on another — a 24x swing from a hyperparameter choice alone. Separately, a
+21-day window (with only ~8 out-of-sample days to measure against) produced
+a multi-day streak with R² climbing to 0.60 — a level of apparent skill
+that isn't plausible for a real financial forecast, and far more consistent
+with small-sample regression instability than a signal maturing. Neither
+kind of result should reach the headline picks, which is exactly why both
+gates are enforced together now.
     """)
 
     st.info(
