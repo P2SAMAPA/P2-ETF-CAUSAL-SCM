@@ -349,11 +349,23 @@ def main():
             # prediction. Sorting the headline picks by magnitude let a
             # barely-qualifying combo (R²=0.008, large predicted move)
             # outrank the most reliable combo found anywhere in this
-            # engine's testing (IWD: R²=0.11, 71% hit rate, 4-day streak,
-            # but a modest predicted move) — backwards from the entire
-            # point of the persistence gate. R² measures reliability
-            # directly; that's what should decide which 3 cards get shown.
-            qualified = [(t, v) for t, v in ranked if v["qualifies"]]
+            # engine's testing (IWD: R²=0.11, 71% hit rate, streak, but a
+            # modest predicted move) — backwards from the entire point of
+            # the persistence gate. R² measures reliability directly;
+            # that's what should decide which 3 cards get shown.
+            #
+            # low_sample combos are EXCLUDED from top-3 entirely, even if
+            # qualifies=True. Observed directly: the 21d window (~8 OOS
+            # days) produced a streak with R² climbing to 0.60 — a level of
+            # apparent skill that isn't plausible for a real financial
+            # forecast, and is far more consistent with small-sample
+            # regression instability than a genuine signal maturing. A
+            # streak built on an estimate we already know is statistically
+            # unreliable (that's what low_sample means) isn't made
+            # trustworthy by being consistently unreliable in the same
+            # direction for a few days — the gate needs both persistence
+            # AND adequate sample size, not persistence alone.
+            qualified = [(t, v) for t, v in ranked if v["qualifies"] and not v["low_sample"]]
             ranked_qualified = sorted(qualified, key=lambda kv: kv[1]["oos_r2"], reverse=True)
             top_etfs = [
                 {"ticker": t, "causal_score": _safe_float(v["score"]),
@@ -378,9 +390,12 @@ def main():
         ranked_best = sorted(best.items(), key=lambda kv: kv[1]["score"], reverse=True)
         # Same fix as Tab 2: among combos that pass the persistence gate,
         # rank by OOS R² (trustworthiness) rather than causal_score
-        # (predicted-move magnitude). full_scores below stays unfiltered
-        # and sorted by causal_score — the transparency view.
-        qualified_best = [(t, v) for t, v in ranked_best if v["qualifies"]]
+        # (predicted-move magnitude), and exclude low_sample combos
+        # entirely — a streak on a statistically unreliable estimate isn't
+        # trustworthy no matter how many days long. full_scores below
+        # stays unfiltered and sorted by causal_score — the transparency
+        # view.
+        qualified_best = [(t, v) for t, v in ranked_best if v["qualifies"] and not v["low_sample"]]
         ranked_best_qualified = sorted(qualified_best, key=lambda kv: kv[1]["oos_r2"], reverse=True)
         top_etfs = [
             {
