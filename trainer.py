@@ -114,6 +114,7 @@ import config
 import data_manager
 import push_results
 import persistence
+import live_tracker
 import causal_scm as cs
 
 logging.basicConfig(
@@ -290,7 +291,7 @@ def main():
                 m: _zscore_method_forecasts(win_result, m) for m in config.CAUSAL_METHODS
             }
 
-            window_scores = {}  # ticker -> {score, method, oos_r2, oos_corr, oos_hit, low_sample, streak, days_tracked, qualifies}
+            window_scores = {}  # ticker -> {score, method, oos_r2, oos_corr, oos_hit, low_sample, streak, days_tracked, qualifies, raw_forecast}
             for ticker, r in win_result.items():
                 candidates = []
                 for m in config.CAUSAL_METHODS:
@@ -298,19 +299,19 @@ def main():
                         continue
                     z = zscores_by_method[m].get(ticker, 0.0)
                     candidates.append((r[m]["oos_r2"], m, z, r[m]["oos_correlation"],
-                                        r[m]["oos_hit_rate"], r[m]["low_sample"]))
+                                        r[m]["oos_hit_rate"], r[m]["low_sample"], r[m]["live_forecast"]))
                 if not candidates:
                     continue
                 # winning method for THIS ticker at THIS window = best OOS R²
                 # (low_sample is surfaced, never used to silently reorder this —
                 # see README for why: transparency over a heuristic tie-break)
                 candidates.sort(key=lambda c: c[0], reverse=True)
-                oos_r2, method, z, oos_corr, oos_hit, low_sample = candidates[0]
+                oos_r2, method, z, oos_corr, oos_hit, low_sample, raw_forecast = candidates[0]
                 streak_info = persistence.compute_streak(history, universe_name, window, ticker, method)
                 window_scores[ticker] = {
                     "score": z, "method": method, "oos_r2": oos_r2,
                     "oos_correlation": oos_corr, "oos_hit_rate": oos_hit,
-                    "low_sample": low_sample,
+                    "low_sample": low_sample, "raw_forecast": raw_forecast,
                     "streak": streak_info["streak"], "days_tracked": streak_info["days_tracked"],
                     "qualifies": streak_info["qualifies"],
                 }
@@ -324,6 +325,7 @@ def main():
                         "window": window, "method": method, "score": z,
                         "oos_r2": oos_r2, "oos_correlation": oos_corr,
                         "oos_hit_rate": oos_hit, "low_sample": low_sample,
+                        "raw_forecast": raw_forecast,
                         "streak": streak_info["streak"], "days_tracked": streak_info["days_tracked"],
                         "qualifies": streak_info["qualifies"],
                     }
@@ -371,7 +373,9 @@ def main():
                 {"ticker": t, "causal_score": _safe_float(v["score"]),
                  "method": v["method"], "oos_r2": _safe_float(v["oos_r2"]),
                  "low_sample": v["low_sample"], "streak": v["streak"],
-                 "days_tracked": v["days_tracked"]}
+                 "days_tracked": v["days_tracked"],
+                 "raw_forecast": _safe_float(v["raw_forecast"]),
+                 "predicted_direction": "up" if v["raw_forecast"] > 0 else "down"}
                 for t, v in ranked_qualified[:config.TOP_N]
             ]
             full_ranking = [[t, _safe_float(v["score"]), v["method"], v["low_sample"],
@@ -406,6 +410,8 @@ def main():
                 "oos_hit_rate": _safe_float(v["oos_hit_rate"]),
                 "low_sample": v["low_sample"],
                 "streak": v["streak"], "days_tracked": v["days_tracked"],
+                "raw_forecast": _safe_float(v["raw_forecast"]),
+                "predicted_direction": "up" if v["raw_forecast"] > 0 else "down",
             }
             for t, v in ranked_best_qualified[:config.TOP_N]
         ]
@@ -427,6 +433,20 @@ def main():
         logger.info(f"  {universe_name} top {config.TOP_N} (persistence-qualified): "
                     f"{[e['ticker'] for e in top_etfs]}")
 
+    # ── Live forward tracking ────────────────────────────────────────────
+    # A different question from everything above: not "did this backtest
+    # well" but "if you'd actually acted on today's qualified picks, did
+    # they make money going forward?" Uses the SAME prices DataFrame
+    # already loaded for the whole pipeline — no second data fetch.
+    live_tracking = live_tracker.load_tracking()
+    live_tracking = live_tracker.update_tracking(live_tracking, run_date, prices, tab1_universes)
+    agg = live_tracking["aggregate"]
+    logger.info(
+        f"Live tracking: {agg['n_open']} open, {agg['n_closed']} closed | "
+        f"next-day hit rate={agg['next_day_hit_rate']} | "
+        f"mean next-day return={agg['mean_next_day_return']}"
+    )
+
     tab1_payload = {"run_date": run_date, "history_days": history_days, "universes": tab1_universes}
     tab2_payload = {"run_date": run_date, "history_days": history_days, "universes": tab2_universes}
     tab3_payload = {"run_date": run_date, "universes": tab3_universes}
@@ -441,6 +461,7 @@ def main():
     tab3_path = Path(f"causal_scm_methods_{run_date}.json")
     tab4_path = Path(f"causal_scm_persistence_{run_date}.json")
     history_path = Path(config.HISTORY_FILENAME)
+    live_tracking_path = Path(live_tracker.LIVE_TRACKING_FILENAME)
 
     for path, payload in [(tab1_path, tab1_payload), (tab2_path, tab2_payload),
                            (tab3_path, tab3_payload), (tab4_path, tab4_payload)]:
@@ -451,11 +472,15 @@ def main():
     persistence.save_history(history, history_path)
     logger.info(f"Wrote {history_path} ({history_days} day(s) of history)")
 
+    live_tracker.save_tracking(live_tracking, live_tracking_path)
+    logger.info(f"Wrote {live_tracking_path}")
+
     push_results.push_daily_result(tab1_path)
     push_results.push_daily_result(tab2_path)
     push_results.push_daily_result(tab3_path)
     push_results.push_daily_result(tab4_path)
     push_results.push_daily_result(history_path)
+    push_results.push_daily_result(live_tracking_path)
 
     logger.info("=== Done ===")
 

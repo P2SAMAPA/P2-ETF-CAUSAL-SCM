@@ -116,6 +116,9 @@ tab1_path = find_latest(files, "causal_scm_2")
 tab2_path = find_latest(files, "causal_scm_windows_")
 tab3_path = find_latest(files, "causal_scm_methods_")
 tab4_path = find_latest(files, "causal_scm_persistence_")
+# Live tracking is a single rolling file (not date-suffixed like the others)
+_live_matches = [f for f in files if f.endswith("causal_scm_live_tracking.json")]
+live_tracking_path = _live_matches[0] if _live_matches else None
 
 if not tab1_path:
     if list_error:
@@ -135,11 +138,14 @@ if "error" in data1:
 data2 = load_json(tab2_path) if tab2_path else None
 data3 = load_json(tab3_path) if tab3_path else None
 data4 = load_json(tab4_path) if tab4_path else None
+data5 = load_json(live_tracking_path) if live_tracking_path else None
 
 universes1 = data1["universes"]
 universes2 = data2["universes"] if data2 and "error" not in data2 else None
 universes3 = data3["universes"] if data3 and "error" not in data3 else None
 universes4 = data4["universes"] if data4 and "error" not in data4 else None
+live_positions = data5.get("positions", []) if data5 and "error" not in data5 else None
+live_aggregate = data5.get("aggregate", {}) if data5 and "error" not in data5 else {}
 
 history_days = data1.get("history_days", 0)
 # getattr with a fallback: if config.py on this deployment predates the
@@ -161,11 +167,12 @@ UNIVERSE_LABELS = {
     "COMBINED": "🌐 Combined",
 }
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🏆 Best Window & Method per ETF",
     "🔍 Explore by Window",
     "🧪 Method Comparison",
     "📈 Signal Persistence",
+    "💰 Live Tracking",
 ])
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -569,3 +576,102 @@ gates are enforced together now.
             f"History retained: up to {getattr(config, 'HISTORY_RETENTION_DAYS', 60)} days · "
             "Streak = consecutive most-recent days with OOS R² > 0, walking backward from today."
         )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 5 — Live Tracking
+# ══════════════════════════════════════════════════════════════════════════════
+with tab5:
+    st.header("💰 Live Tracking — Did the Picks Actually Make Money?")
+
+    st.markdown("""
+Every other tab measures **backward-looking** out-of-sample skill — would
+this have predicted the recent past. This tab answers a different, more
+direct question: **if you had actually acted on each day's persistence-
+qualified top picks, did they make money going forward?**
+
+A paper position opens at the closing price on the day a (ticker, window,
+method) combination first qualifies for the top-3, and closes the day it
+stops qualifying (loses its streak, or its OOS R² decays below the bar).
+**Next-day return** checks the very first new trading day after entry
+against the model's predicted direction — the cleanest, least noisy read on
+real forecast skill. **Cumulative return** tracks the position for as long
+as it stays open.
+    """)
+
+    if not live_positions:
+        st.info(
+            "No live tracking data yet. This starts accumulating automatically "
+            "from the next `trainer.py` run that has at least one persistence-"
+            "qualified pick — check back after a few more days."
+        )
+    else:
+        n_open = live_aggregate.get("n_open", 0)
+        n_closed = live_aggregate.get("n_closed", 0)
+        hit_rate = live_aggregate.get("next_day_hit_rate")
+        mean_next_day = live_aggregate.get("mean_next_day_return")
+        mean_cum_closed = live_aggregate.get("mean_cumulative_return_closed")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Open positions", n_open)
+        c2.metric("Closed positions", n_closed)
+        c3.metric("Next-day hit rate", f"{hit_rate:.0%}" if hit_rate is not None else "—")
+        c4.metric("Mean next-day return", f"{mean_next_day:+.2%}" if mean_next_day is not None else "—")
+
+        if mean_cum_closed is not None:
+            st.caption(f"Mean cumulative return on closed positions: {mean_cum_closed:+.2%}")
+
+        n_with_outcome = sum(1 for p in live_positions if p["next_day_return"] is not None)
+        if n_with_outcome < 10:
+            st.warning(
+                f"⚠️ Only {n_with_outcome} position(s) have a recorded next-day outcome so far. "
+                "This is nowhere near enough to draw a real conclusion — a hit rate or mean "
+                "return from a handful of positions is dominated by noise. Treat every number "
+                "on this tab as provisional until this count is well into the dozens."
+            )
+
+        st.markdown("### Open positions")
+        open_rows = [p for p in live_positions if p["status"] == "open"]
+        if open_rows:
+            df = pd.DataFrame([{
+                "Ticker": p["ticker"], "Universe": p["universe"],
+                "Window": p["window"], "Method": config.METHOD_LABELS.get(p["method"], p["method"]),
+                "Entry Date": p["entry_date"], "Entry Price": p["entry_price"],
+                "Predicted": p["predicted_direction"],
+                "Next-Day Return": p["next_day_return"],
+                "Correct?": ("✅" if p["next_day_correct"] else "❌") if p["next_day_correct"] is not None else "pending",
+                "Cumulative Return": p["cumulative_return"],
+            } for p in open_rows])
+            st.dataframe(
+                df.style.format({"Entry Price": "{:.2f}", "Next-Day Return": "{:+.2%}",
+                                  "Cumulative Return": "{:+.2%}"}, na_rep="—"),
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.info("No open positions right now.")
+
+        st.markdown("### Closed positions")
+        closed_rows = [p for p in live_positions if p["status"] == "closed"]
+        if closed_rows:
+            df = pd.DataFrame([{
+                "Ticker": p["ticker"], "Universe": p["universe"],
+                "Window": p["window"], "Method": config.METHOD_LABELS.get(p["method"], p["method"]),
+                "Entry Date": p["entry_date"], "Exit Date": p["exit_date"],
+                "Predicted": p["predicted_direction"],
+                "Next-Day Return": p["next_day_return"],
+                "Correct?": ("✅" if p["next_day_correct"] else "❌") if p["next_day_correct"] is not None else "—",
+                "Final Return": p["cumulative_return"],
+            } for p in closed_rows]).sort_values("Exit Date", ascending=False)
+            st.dataframe(
+                df.style.format({"Next-Day Return": "{:+.2%}", "Final Return": "{:+.2%}"}, na_rep="—"),
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.info("No closed positions yet.")
+
+        st.caption(
+            "Positions open at the closing price the day a combo first qualifies, and close "
+            "the day it stops qualifying. Stale-data runs never advance next-day/cumulative "
+            "return calculations — same protection as the persistence history."
+        )
+
+
