@@ -110,8 +110,19 @@ def update_tracking(tracking: dict, run_date: str, prices: pd.DataFrame,
             "exit_date": None,
         })
 
-    # ── Update every position's price-derived fields ────────────────────
+    # ── Update every OPEN position's price-derived fields ───────────────
+    # Closed positions are intentionally skipped here — their
+    # cumulative_return must freeze at whatever it was on the exit day,
+    # representing what you'd actually have realized by exiting when the
+    # model said to. Previously this loop updated every position
+    # regardless of status, so a "closed" position's return kept drifting
+    # with the market indefinitely after exit — found directly: a position
+    # closed at -2.9% showed -5.2% two updates later despite being
+    # labeled closed the whole time, with no corresponding change to its
+    # exit_date. That's not what "closed" is supposed to mean.
     for p in positions:
+        if p["status"] != "open":
+            continue
         if p["ticker"] not in prices.columns:
             continue
         series = prices[p["ticker"]].dropna()
